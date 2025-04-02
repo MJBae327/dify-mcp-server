@@ -98,7 +98,7 @@ async def handle_list_tools() -> list[types.Tool]:
 
     for i in range(len(tool_names)):
         app_info = tool_infos[i]
-        
+
         input_schema = {
             "type": "object",
             "properties": {},
@@ -108,13 +108,21 @@ async def handle_list_tools() -> list[types.Tool]:
         app_param = tool_params[i]
         
         if 'user_input_form' in app_param:
+            TYPE_MAPPING = {
+                "paragraph": "string",
+                "number-input": "number",
+                "select": "string"
+            }
+
             for param in app_param['user_input_form']:
-                param_type = param.get('type', 'string')
-                param_info = param.get('config', {})
-                property_name = param_info.get('variable', 'unknown')
+                field_type = list(param.keys())[0]
+                param_info = param[field_type]
+                property_name = param_info['variable']
+
                 input_schema["properties"][property_name] = {
-                    "type": param_type,
+                    "type": TYPE_MAPPING.get(field_type, "string"),
                     "description": param_info.get('label', ''),
+                    "default": param_info.get('default', "")
                 }
                 if param_info.get('required', False):
                     input_schema["required"].append(property_name)
@@ -145,8 +153,14 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
         outputs = {}
         
         async for res in responses:
-            if res['event'] == 'workflow_finished':
+            if res['event'] == 'workflow_started':
+                print(f"[DEBUG] Workflow started: Task ID {res['task_id']}")
+            elif res['event'] == 'message':
+                print(f"[DEBUG] Intermediate message: {res['message']}")
+            elif res['event'] == 'workflow_finished':
                 outputs.update(res['data']['outputs'])
+            elif res['event'] == 'error':
+                raise Exception(res['data'])
 
     except Exception as e:
         return [types.TextContent(text=f"Error occurred: {str(e)}")]
@@ -177,7 +191,7 @@ async def main():
                 server_name="dify_mcp_server",
                 server_version="0.1.0",
                 capabilities=server.get_capabilities(
-                    notification_options=NotificationOptions(tool_call_enabled=True),
+                    notification_options=NotificationOptions(),
                     experimental_capabilities={},
                 ),
                 protocol_version="2024-11-05",
