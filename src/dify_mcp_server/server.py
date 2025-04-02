@@ -177,7 +177,7 @@ async def main():
                 server_name="dify_mcp_server",
                 server_version="0.1.0",
                 capabilities=server.get_capabilities(
-                    notification_options=NotificationOptions(tool_call_enabled=True),
+                    notification_options=NotificationOptions(),
                     experimental_capabilities={},
                 ),
                 protocol_version="2024-11-05",
