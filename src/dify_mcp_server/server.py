@@ -8,7 +8,7 @@ import mcp.types as types
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from omegaconf import OmegaConf
-import aiohttp  # 비동기 HTTP 클라이언트
+import requests
 
 
 class DifyAPI(ABC):
@@ -35,33 +35,26 @@ class DifyAPI(ABC):
         self.dify_app_metas = dify_app_metas
         self.dify_app_names = [x['name'] for x in dify_app_infos]
 
-    async def chat_message(self, api_key, inputs={}, response_mode="streaming", conversation_id=None, user="default_user", files=None):
+    def chat_message(self, api_key, inputs={}, response_mode="streaming", conversation_id=None, user="default_user", files=None):
         url = f"{self.dify_base_url}/workflows/run"
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "inputs": inputs,
-            "response_mode": response_mode,
-            "user": user,
-        }
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        data = {"inputs": inputs, "response_mode": response_mode, "user": user}
+        
         if conversation_id:
             data["conversation_id"] = conversation_id
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=data) as response:
-                response.raise_for_status()
+        response = requests.post(url, headers=headers, json=data, stream=response_mode == "streaming")
+        response.raise_for_status()
 
-                if response_mode == "streaming":
-                    async for line in response.content:
-                        if line.startswith(b'data:'):
-                            try:
-                                yield json.loads(line[5:].decode('utf-8'))
-                            except json.JSONDecodeError:
-                                print(f"Error decoding JSON: {line}")
-                else:
-                    return await response.json()
+        if response_mode == "streaming":
+            for line in response.iter_lines():
+                if line.startswith(b'data:'):
+                    try:
+                        yield json.loads(line[5:].decode('utf-8'))
+                    except json.JSONDecodeError:
+                        yield {"error": "JSON 디코딩 실패"}
+        else:
+            yield response.json()
 
     def get_app_info(self, api_key):
         url = f"{self.dify_base_url}/info"
@@ -139,29 +132,27 @@ async def handle_list_tools() -> list[types.Tool]:
 
 
 @server.call_tool()
-async def handle_call_tool(name: str, arguments: dict | None) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
-    tool_names = dify_api.dify_app_names
-
-    if name not in tool_names:
-        raise ValueError(f"Unknown tool: {name}")
-
-    tool_idx = tool_names.index(name)
+async def handle_call_tool(name: str, arguments: dict | None) -> list[types.TextContent]:
+    tool_idx = dify_api.dify_app_names.index(name)
     tool_sk = dify_api.dify_app_sks[tool_idx]
 
     try:
-        responses = dify_api.chat_message(tool_sk, arguments)
-        
         outputs = {}
+        for res in dify_api.chat_message(tool_sk, arguments or {}):
+            if res.get('error'):
+                return [types.TextContent(type="text", text=res['error'])]
+                
+            event_type = res.get('event')
+            if event_type == 'workflow_finished':
+                outputs.update(res.get('data', {}).get('outputs', {}))
+
+        return [
+            types.TextContent(type="text", text=str(value))
+            for value in outputs.values()
+        ]
         
-        async for res in responses:
-            if res['event'] == 'workflow_started':
-                print(f"[DEBUG] Workflow started: Task ID {res['task_id']}")
-            elif res['event'] == 'message':
-                print(f"[DEBUG] Intermediate message: {res['message']}")
-            elif res['event'] == 'workflow_finished':
-                outputs.update(res['data']['outputs'])
-            elif res['event'] == 'error':
-                raise Exception(res['data'])
+    except Exception as e:
+        return [types.TextContent(type="text", text=f"오류: {str(e)}")]
 
     except Exception as e:
         error_msg = f"Error occurred: {str(e)}"
