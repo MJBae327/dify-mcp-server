@@ -5,10 +5,10 @@ from abc import ABC
 
 import mcp.server.stdio
 import mcp.types as types
-import requests
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from omegaconf import OmegaConf
+import aiohttp  # 비동기 HTTP 클라이언트
 
 
 class DifyAPI(ABC):
@@ -35,7 +35,7 @@ class DifyAPI(ABC):
         self.dify_app_metas = dify_app_metas
         self.dify_app_names = [x['name'] for x in dify_app_infos]
 
-    def chat_message(self, api_key, inputs={}, response_mode="streaming", conversation_id=None, user="default_user", files=None):
+    async def chat_message(self, api_key, inputs={}, response_mode="streaming", conversation_id=None, user="default_user", files=None):
         url = f"{self.dify_base_url}/workflows/run"
         headers = {
             "Authorization": f"Bearer {api_key}",
@@ -49,18 +49,19 @@ class DifyAPI(ABC):
         if conversation_id:
             data["conversation_id"] = conversation_id
 
-        response = requests.post(url, headers=headers, json=data, stream=response_mode == "streaming")
-        response.raise_for_status()
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=data) as response:
+                response.raise_for_status()
 
-        if response_mode == "streaming":
-            for line in response.iter_lines():
-                if line and line.startswith(b'data:'):
-                    try:
-                        yield json.loads(line[5:].decode('utf-8'))
-                    except json.JSONDecodeError:
-                        print(f"Error decoding JSON: {line}")
-        else:
-            return response.json()
+                if response_mode == "streaming":
+                    async for line in response.content:
+                        if line.startswith(b'data:'):
+                            try:
+                                yield json.loads(line[5:].decode('utf-8'))
+                            except json.JSONDecodeError:
+                                print(f"Error decoding JSON: {line}")
+                else:
+                    return await response.json()
 
     def get_app_info(self, api_key):
         url = f"{self.dify_base_url}/info"
@@ -163,10 +164,11 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
                 raise Exception(res['data'])
 
     except Exception as e:
-        return [types.TextContent(text=f"Error occurred: {str(e)}")]
+        error_msg = f"Error occurred: {str(e)}"
+        return [types.TextContent(type="text", text=error_msg)]
 
     return [
-        types.TextContent(text=value) for value in outputs.values()
+        types.TextContent(type="text", text=value) for value in outputs.values()
     ]
 
 
