@@ -147,20 +147,12 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
                 outputs.update(res.get('data', {}).get('outputs', {}))
 
         return [
-            types.TextContent(type="text", text=str(value))
-            for value in outputs.values()
+            types.TextContent(type="text", text=f"{key}={value}")
+            for key, value in outputs.items()
         ]
         
     except Exception as e:
         return [types.TextContent(type="text", text=f"오류: {str(e)}")]
-
-    except Exception as e:
-        error_msg = f"Error occurred: {str(e)}"
-        return [types.TextContent(type="text", text=error_msg)]
-
-    return [
-        types.TextContent(type="text", text=value) for value in outputs.values()
-    ]
 
 
 @server.list_resources()
